@@ -1,0 +1,13 @@
+[package]
+name = "lotto_sim"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+toml = "1.1"
+eframe = "0.34"
+rand = "0.10"
+itertools = "0.14"
+egui_plot = "0.35"
+getrandom = {version = "0.4", features = ["std", "sys_rng"] }

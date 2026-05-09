@@ -1,0 +1,50 @@
+[general]
+starting_balance = 500_000_000.0
+
+[powerball]
+pool_max = 35
+draw_count = 7
+has_powerball = true
+cost_per_game = 1.575 # Standard subscription rate approx
+prizes = [
+    { matches = 7, pb = true,  amount = 50_000_000.0 },
+    { matches = 7, pb = false, amount = 210_000.0 }, 
+    { matches = 6, pb = true,  amount = 18_000.0 },
+    { matches = 6, pb = false, amount = 700.0 },
+    { matches = 5, pb = true,  amount = 200.0 },
+    { matches = 4, pb = true,  amount = 90.0 },
+    { matches = 5, pb = false, amount = 55.0 },
+    { matches = 3, pb = true,  amount = 25.0 },
+    { matches = 2, pb = true,  amount = 12.50 },
+]
+
+[saturday]
+pool_max = 45
+draw_count = 6
+supps = 2
+has_powerball = false
+cost_per_game = 0.9625 # Saturday "Gold Lotto" style pricing
+prizes = [
+    { matches = 6, supps = 0, amount = 5_000_000.0 },
+    { matches = 5, supps = 1, amount = 12_000.0 },
+    { matches = 5, supps = 0, amount = 1_000.0 },
+    { matches = 4, supps = 0, amount = 35.0 },
+    { matches = 3, supps = 1, amount = 22.0 },
+    { matches = 3, supps = 0, amount = 10.0 },
+]
+
+[ozlotto]
+pool_max = 47
+draw_count = 7
+supps = 3
+has_powerball = false
+cost_per_game = 1.46
+prizes = [
+    { matches = 7, supps = 0, amount = 10_000_000.0 },
+    { matches = 6, supps = 1, amount = 45_000.0 },
+    { matches = 6, supps = 0, amount = 4_000.0 },
+    { matches = 5, supps = 1, amount = 450.0 },
+    { matches = 5, supps = 0, amount = 60.0 },
+    { matches = 4, supps = 0, amount = 28.0 },
+    { matches = 3, supps = 1, amount = 16.0 },
+]
