@@ -64,7 +64,6 @@ pub struct LotteryApp {
     pub stats: Arc<Mutex<SimStats>>,
     pub running: Arc<AtomicBool>,
     pub auto_pick_count: usize,
-    pub ticket_multiplier: usize,
     pub pre_it_exact: u64,
     pub custom_starting_balance: f64,
 }
@@ -94,7 +93,6 @@ impl LotteryApp {
             stats: Arc::new(Mutex::new(stats_data)),
             running: Arc::new(AtomicBool::new(false)),
             auto_pick_count: 7,
-            ticket_multiplier: 1,
             pre_it_exact: 1_000_000,
             custom_starting_balance: initial_bal,
         }
