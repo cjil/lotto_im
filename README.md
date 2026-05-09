@@ -22,11 +22,13 @@
 
 ## Running the project
 
-1. Install Rust and Cargo: https://www.rust-lang.org/tools/install
+1. Install Rust and Cargo: [https://www.rust-lang.org/tools/install](https://www.rust-lang.org/tools/install)
 2. Run the app:
+
    ```powershell
    cargo run
    ```
+
 3. Edit `lotto_config.toml` to adjust game rules, prize amounts, pool sizes, and costs.
 
 ## Configuration
