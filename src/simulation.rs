@@ -293,6 +293,7 @@ impl LotteryApp {
                 stats.total_won += total_prize;
 
                 if total_prize >= top_prize && total_prize > 0.0 {
+                    // FIXME: The break functionality is not working as expected. If we have multiple games in a draw it will not exit on a div 1 win
                     running.store(false, Ordering::Relaxed);
                     let d = stats.total_draws as f64;
                     let b = stats.balance;

@@ -26,7 +26,7 @@ pub struct GameConfig {
 }
 
 fn default_powerball_max() -> u32 {
-    20
+    20 // TODO: This needs to go into the lotto_config.toml file
 }
 
 #[derive(Deserialize, Clone)]
