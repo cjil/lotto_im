@@ -1,7 +1,7 @@
 [general]
 starting_balance = 500_000_000.0
 
-[powerball]
+[Powerball]
 pool_max = 35
 draw_count = 7
 has_powerball = true
@@ -18,7 +18,7 @@ prizes = [
     { matches = 2, pb = true,  amount = 12.50 },
 ]
 
-[saturday]
+[Saturday]
 pool_max = 45
 draw_count = 6
 supps = 2
@@ -33,7 +33,7 @@ prizes = [
     { matches = 3, supps = 0, amount = 10.0 },
 ]
 
-[ozlotto]
+[OzLotto]
 pool_max = 47
 draw_count = 7
 supps = 3

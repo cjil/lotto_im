@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::collections::BTreeMap;
 
 #[derive(Deserialize, Clone)]
 pub struct PrizeRule {
@@ -19,15 +20,20 @@ pub struct GameConfig {
     pub has_powerball: bool,
     #[serde(default)]
     pub supps: u32,
+    #[serde(default = "default_powerball_max")]
+    pub powerball_max: u32,
     pub prizes: Vec<PrizeRule>,
+}
+
+fn default_powerball_max() -> u32 {
+    20
 }
 
 #[derive(Deserialize, Clone)]
 pub struct AppConfig {
     pub general: GeneralConfig,
-    pub powerball: GameConfig,
-    pub saturday: GameConfig,
-    pub ozlotto: GameConfig,
+    #[serde(flatten)]
+    pub games: BTreeMap<String, GameConfig>,
 }
 
 #[derive(Deserialize, Clone)]
