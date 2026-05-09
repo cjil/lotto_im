@@ -1,0 +1,15 @@
+{
+    "folders": [
+        {
+            "path": "."
+        }
+    ],
+    "settings": {},
+	"extensions": {
+		"recommendations": [
+			"usernamehw.errorlens",
+            "davidanson.vscode-markdownlint"
+		],
+		"unwantedRecommendations": []
+	}
+}
