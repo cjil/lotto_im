@@ -96,7 +96,7 @@ impl LotteryApp {
 
                 let base_games: u64 = self.selected_numbers.iter().map(|nums| crate::helpers::combinations(nums.len() as u64, draw_count as u64)).sum();
                 let ticket_multiplier = self.selected_numbers.len() as u64;
-                let game_multiplier: u64 = self.is_powerhit.iter().zip(&self.selected_numbers).map(|(ph, nums)| {
+                let game_multiplier: u64 = self.is_powerhit.iter().zip(&self.selected_numbers).map(|(ph, _nums)| {
                     if *ph && has_powerball { 20 } else { 1 }
                 }).sum();
                 let total_games = base_games * game_multiplier;
@@ -292,7 +292,7 @@ impl LotteryApp {
                 let s = self.stats.lock().unwrap();
                 s.history.iter().map(|&[x, y]| [x, y]).collect()
             };
-            let max_balance = {
+            let _max_balance = {
                 let s = self.stats.lock().unwrap();
                 s.history.iter().map(|&[_x, y]| y).fold(s.balance, f64::max)
             };
