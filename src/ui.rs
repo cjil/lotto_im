@@ -27,9 +27,12 @@ impl LotteryApp {
                 for (game_idx, game_name) in self.game_keys.iter().enumerate() {
                     if ui.selectable_label(self.active_game_idx == game_idx, game_name).clicked() {
                         self.active_game_idx = game_idx;
-                        self.selected_numbers.clear();
-                        self.selected_powerball = None;
-                        self.is_powerhit = false;
+                        self.selected_numbers = vec![vec![]];
+                        self.selected_powerball = vec![None];
+                        self.is_powerhit = vec![false];
+                        self.current_selected.clear();
+                        self.current_pb = None;
+                        self.current_powerhit = false;
                     }
                 }
                 if ui.button("Reload Config").clicked() {
@@ -83,18 +86,20 @@ impl LotteryApp {
                 });
 
                 if has_powerball {
-                    ui.checkbox(&mut self.is_powerhit, "Powerhit (Guarantees Powerball)");
+                    ui.checkbox(&mut self.current_powerhit, "Powerhit (Guarantees Powerball)");
                 }
 
                 ui.horizontal(|ui| {
                     ui.label("Entries per draw:");
-                    ui.add(egui::DragValue::new(&mut self.ticket_multiplier).range(1..=50));
+                    ui.label(self.selected_numbers.len().to_string());
                 });
 
-                let base_games = crate::helpers::combinations(self.selected_numbers.len() as u64, draw_count as u64);
-                let ticket_multiplier = self.ticket_multiplier as u64;
-                let game_multiplier = if self.is_powerhit && has_powerball { 20 } else { 1 };
-                let total_games = base_games * ticket_multiplier * game_multiplier;
+                let base_games: u64 = self.selected_numbers.iter().map(|nums| crate::helpers::combinations(nums.len() as u64, draw_count as u64)).sum();
+                let ticket_multiplier = self.selected_numbers.len() as u64;
+                let game_multiplier: u64 = self.is_powerhit.iter().zip(&self.selected_numbers).map(|(ph, nums)| {
+                    if *ph && has_powerball { 20 } else { 1 }
+                }).sum();
+                let total_games = base_games * game_multiplier;
 
                 ui.colored_label(
                     egui::Color32::GOLD,
@@ -108,13 +113,13 @@ impl LotteryApp {
 
                 egui::Grid::new("num_grid").spacing([5.0, 5.0]).show(ui, |ui| {
                     for i in 1..=pool_max {
-                        let is_selected = self.selected_numbers.contains(&i);
+                        let is_selected = self.current_selected.contains(&i);
                         if ui.selectable_label(is_selected, i.to_string()).clicked() {
                             if is_selected {
-                                self.selected_numbers.retain(|&x| x != i);
-                            } else if self.selected_numbers.len() < 20 {
-                                self.selected_numbers.push(i);
-                                self.selected_numbers.sort();
+                                self.current_selected.retain(|&x| x != i);
+                            } else if self.current_selected.len() < 20 {
+                                self.current_selected.push(i);
+                                self.current_selected.sort();
                             }
                         }
                         if i % 10 == 0 {
@@ -123,15 +128,54 @@ impl LotteryApp {
                     }
                 });
 
-                if has_powerball && !self.is_powerhit {
+                if has_powerball && !self.current_powerhit {
                     ui.horizontal_wrapped(|ui| {
                         ui.label("PB:");
                         for i in 1..=pb_max {
-                            if ui.selectable_label(self.selected_powerball == Some(i), i.to_string()).clicked() {
-                                self.selected_powerball = Some(i);
+                            if ui.selectable_label(self.current_pb == Some(i), i.to_string()).clicked() {
+                                self.current_pb = Some(i);
                             }
                         }
                     });
+                }
+
+                ui.horizontal(|ui| {
+                    if ui.button("Add Entry").clicked() && !self.current_selected.is_empty() && self.current_selected.len() >= draw_count as usize {
+                        self.selected_numbers.push(self.current_selected.clone());
+                        self.selected_powerball.push(self.current_pb);
+                        self.is_powerhit.push(self.current_powerhit);
+                        self.current_selected.clear();
+                        self.current_pb = None;
+                        self.current_powerhit = false;
+                    }
+                    if ui.button("Clear Current").clicked() {
+                        self.current_selected.clear();
+                        self.current_pb = None;
+                        self.current_powerhit = false;
+                    }
+                });
+
+                ui.separator();
+                ui.label("Current Entries:");
+                let mut to_remove = vec![];
+                for i in 0..self.selected_numbers.len() {
+                    ui.horizontal(|ui| {
+                        ui.label(format!("Entry {}: {:?}", i + 1, self.selected_numbers[i]));
+                        if let Some(p) = self.selected_powerball[i] {
+                            ui.label(format!("PB: {}", p));
+                        }
+                        if self.is_powerhit[i] {
+                            ui.label("Powerhit");
+                        }
+                        if ui.button("Remove").clicked() {
+                            to_remove.push(i);
+                        }
+                    });
+                }
+                for &i in to_remove.iter().rev() {
+                    self.selected_numbers.remove(i);
+                    self.selected_powerball.remove(i);
+                    self.is_powerhit.remove(i);
                 }
             });
 
@@ -163,7 +207,7 @@ impl LotteryApp {
                     .allow_drag([true, false])
                     .allow_zoom([true, false])
                     .allow_boxed_zoom(false)
-                    .default_y_bounds(0.0, max_variance * 1.05)
+                    .include_y(0.0)
                     .show(ui, |plot_ui| {
                         plot_ui.bar_chart(BarChart::new("Variance", bars).width(0.6));
                     });
@@ -192,7 +236,7 @@ impl LotteryApp {
                         .allow_drag([true, false])
                         .allow_zoom([true, false])
                         .allow_boxed_zoom(false)
-                        .default_y_bounds(0.0, max_pb_variance * 1.05)
+                        .include_y(0.0)
                         .show(ui, |plot_ui| {
                             plot_ui.bar_chart(BarChart::new("PB Variance", pb_bars).width(0.6));
                         });
@@ -214,8 +258,8 @@ impl LotteryApp {
 
             ui.horizontal(|ui| {
                 let is_running = self.running.load(Ordering::Relaxed);
-                let can_start = self.selected_numbers.len() >= draw_count as usize
-                    && (!has_powerball || self.is_powerhit || self.selected_powerball.is_some());
+                let can_start = !self.selected_numbers.is_empty() && self.selected_numbers.iter().all(|nums| nums.len() >= draw_count as usize)
+                    && (!has_powerball || self.selected_numbers.iter().zip(&self.is_powerhit).all(|(nums, ph)| *ph || self.selected_powerball[self.selected_numbers.iter().position(|n| n == nums).unwrap()].is_some()));
 
                 if ui
                     .add_enabled(
@@ -253,18 +297,17 @@ impl LotteryApp {
                 s.history.iter().map(|&[_x, y]| y).fold(s.balance, f64::max)
             };
 
-            Plot::new("history")
-                .height(225.0)
-                .allow_scroll([true, false])
-                .allow_drag([true, false])
-                .allow_zoom([true, false])
-                .allow_boxed_zoom(false)
-                .default_y_bounds(0.0, (max_balance * 1.05).max(1.0))
-                .y_axis_formatter(|mark, _| format_currency(mark.value))
-                .show(ui, |plot_ui| {
-                    plot_ui.line(Line::new("Balance", points).color(egui::Color32::GREEN));
-                });
-
+                Plot::new("history")
+                    .height(225.0)
+                    .allow_scroll([true, false])
+                    .allow_drag([true, false])
+                    .allow_zoom([true, false])
+                    .allow_boxed_zoom(false)
+                    .include_y(0.0)
+                    .y_axis_formatter(|mark, _| format_currency(mark.value))
+                    .show(ui, |plot_ui| {
+                        plot_ui.line(Line::new("Balance", points).color(egui::Color32::GREEN));
+                    });
             if self.running.load(Ordering::Relaxed) {
                 ui.ctx().request_repaint();
             }

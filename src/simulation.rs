@@ -55,9 +55,12 @@ pub struct LotteryApp {
     pub config: AppConfig,
     pub game_keys: Vec<String>,
     pub active_game_idx: usize,
-    pub selected_numbers: Vec<u32>,
-    pub selected_powerball: Option<u32>,
-    pub is_powerhit: bool,
+    pub selected_numbers: Vec<Vec<u32>>,
+    pub selected_powerball: Vec<Option<u32>>,
+    pub is_powerhit: Vec<bool>,
+    pub current_selected: Vec<u32>,
+    pub current_pb: Option<u32>,
+    pub current_powerhit: bool,
     pub stats: Arc<Mutex<SimStats>>,
     pub running: Arc<AtomicBool>,
     pub auto_pick_count: usize,
@@ -82,9 +85,12 @@ impl LotteryApp {
             config,
             game_keys,
             active_game_idx: 0,
-            selected_numbers: vec![],
-            selected_powerball: None,
-            is_powerhit: false,
+            selected_numbers: vec![vec![]],
+            selected_powerball: vec![None],
+            is_powerhit: vec![false],
+            current_selected: vec![],
+            current_pb: None,
+            current_powerhit: false,
             stats: Arc::new(Mutex::new(stats_data)),
             running: Arc::new(AtomicBool::new(false)),
             auto_pick_count: 7,
@@ -131,9 +137,12 @@ impl LotteryApp {
         self.config = config;
         self.initialize_game_list();
         self.active_game_idx = self.game_keys.iter().position(|name| name == &previous_game).unwrap_or(0);
-        self.selected_numbers.clear();
-        self.selected_powerball = None;
-        self.is_powerhit = false;
+        self.selected_numbers = vec![vec![]];
+        self.selected_powerball = vec![None];
+        self.is_powerhit = vec![false];
+        self.current_selected.clear();
+        self.current_pb = None;
+        self.current_powerhit = false;
         self.running.store(false, Ordering::Relaxed);
         self.stats = Arc::new(Mutex::new(Self::build_stats(&self.config)));
     }
@@ -154,7 +163,7 @@ impl LotteryApp {
             pb_list.sort_by(|a, b| b.1.cmp(&a.1));
             if let Some(hot_pb) = pb_list.first() {
                 if hot_pb.1 > 0 {
-                    self.selected_powerball = Some(hot_pb.0);
+                    self.current_pb = Some(hot_pb.0);
                 }
             }
         }
@@ -185,7 +194,7 @@ impl LotteryApp {
             }
         }
         final_selection.sort();
-        self.selected_numbers = final_selection;
+        self.current_selected = final_selection;
     }
 
     pub fn run_fast_iterations(&mut self, iterations: u64) {
@@ -229,20 +238,20 @@ impl LotteryApp {
         let stats_arc = self.stats.clone();
         let running = self.running.clone();
         let active_cfg = self.active_config().clone();
-        let user_nums = self.selected_numbers.clone();
-        let user_pb = self.selected_powerball;
-        let is_powerhit = self.is_powerhit;
-        let ticket_multiplier = self.ticket_multiplier;
+        let user_tickets = self.selected_numbers.clone();
+        let user_pbs = self.selected_powerball.clone();
+        let powerhits = self.is_powerhit.clone();
 
         std::thread::spawn(move || {
             let mut rng = rand::rng();
-            let base_combs = crate::helpers::combinations(user_nums.len() as u64, active_cfg.draw_count as u64);
-            let total_games = base_combs
-                * ticket_multiplier as u64
-                * if is_powerhit && active_cfg.has_powerball { 20 } else { 1 };
+            let total_games: u64 = user_tickets.iter().map(|nums| {
+                let base_combs = crate::helpers::combinations(nums.len() as u64, active_cfg.draw_count as u64);
+                let game_multiplier = if powerhits[user_tickets.iter().position(|t| t == nums).unwrap()] && active_cfg.has_powerball { 20 } else { 1 };
+                base_combs * game_multiplier
+            }).sum();
             let cost_per_draw = total_games as f64 * active_cfg.cost_per_game;
             let max_prize = active_cfg.prizes.iter().map(|p| p.amount).fold(0.0, f64::max);
-            let top_prize = max_prize * ticket_multiplier as f64;
+            let top_prize = max_prize * user_tickets.len() as f64;  // assuming each can win max
 
             while running.load(Ordering::Relaxed) {
                 let mut stats = stats_arc.lock().unwrap();
@@ -268,16 +277,19 @@ impl LotteryApp {
                     stats.pb_frequency[pb as usize] += 1;
                 }
 
-                let prize = calculate_prize(
-                    &active_cfg,
-                    &user_nums,
-                    &winning_nums,
-                    &winning_supps,
-                    draw_pb,
-                    is_powerhit,
-                    user_pb,
-                );
-                let total_prize = prize * ticket_multiplier as f64;
+                let mut total_prize = 0.0;
+                for (i, user_nums) in user_tickets.iter().enumerate() {
+                    let prize = calculate_prize(
+                        &active_cfg,
+                        user_nums,
+                        &winning_nums,
+                        &winning_supps,
+                        draw_pb,
+                        powerhits[i],
+                        user_pbs[i],
+                    );
+                    total_prize += prize;
+                }
 
                 stats.balance += total_prize;
                 stats.total_won += total_prize;
