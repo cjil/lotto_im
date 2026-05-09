@@ -1,1 +1,26 @@
+# Build output
 /target
+
+# Rust/Cargo metadata
+**/*.rs.bk
+
+# IDE/editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
+*.log
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.exe
+*.dll
+*.dylib
+*.so
+*.pdb
+*.lib
+*.app
