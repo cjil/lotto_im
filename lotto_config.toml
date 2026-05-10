@@ -5,6 +5,7 @@ starting_balance = 500_000_000.0
 pool_max = 35
 draw_count = 7
 has_powerball = true
+powerball_max = 20
 cost_per_game = 1.575 # Standard subscription rate approx
 prizes = [
     { matches = 7, pb = true,  amount = 50_000_000.0 },

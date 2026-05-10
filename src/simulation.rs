@@ -63,6 +63,7 @@ pub struct LotteryApp {
     pub current_powerhit: bool,
     pub stats: Arc<Mutex<SimStats>>,
     pub running: Arc<AtomicBool>,
+    pub analysis_running: Arc<AtomicBool>,
     pub auto_pick_count: usize,
     pub pre_it_exact: u64,
     pub custom_starting_balance: f64,
@@ -84,14 +85,15 @@ impl LotteryApp {
             config,
             game_keys,
             active_game_idx: 0,
-            selected_numbers: vec![vec![]],
-            selected_powerball: vec![None],
-            is_powerhit: vec![false],
+            selected_numbers: vec![],
+            selected_powerball: vec![],
+            is_powerhit: vec![],
             current_selected: vec![],
             current_pb: None,
             current_powerhit: false,
             stats: Arc::new(Mutex::new(stats_data)),
             running: Arc::new(AtomicBool::new(false)),
+            analysis_running: Arc::new(AtomicBool::new(false)),
             auto_pick_count: 7,
             pre_it_exact: 1_000_000,
             custom_starting_balance: initial_bal,
@@ -100,7 +102,7 @@ impl LotteryApp {
 
     pub fn build_stats(config: &AppConfig) -> SimStats {
         let max_pool = config.games.values().map(|g| g.pool_max).max().unwrap_or(0) as usize;
-        let max_pb = config.games.values().filter(|g| g.has_powerball).map(|g| g.powerball_max).max().unwrap_or(0) as usize;
+        let max_pb = config.games.values().filter(|g| g.has_powerball).filter_map(|g| g.powerball_max).max().unwrap_or(0) as usize;
 
         SimStats {
             balance: config.general.starting_balance,
@@ -135,13 +137,14 @@ impl LotteryApp {
         self.config = config;
         self.initialize_game_list();
         self.active_game_idx = self.game_keys.iter().position(|name| name == &previous_game).unwrap_or(0);
-        self.selected_numbers = vec![vec![]];
-        self.selected_powerball = vec![None];
-        self.is_powerhit = vec![false];
+        self.selected_numbers = vec![];
+        self.selected_powerball = vec![];
+        self.is_powerhit = vec![];
         self.current_selected.clear();
         self.current_pb = None;
         self.current_powerhit = false;
         self.running.store(false, Ordering::Relaxed);
+        self.analysis_running.store(false, Ordering::Relaxed);
         self.stats = Arc::new(Mutex::new(Self::build_stats(&self.config)));
     }
 
@@ -155,7 +158,7 @@ impl LotteryApp {
             .collect();
 
         if active_cfg.has_powerball {
-            let mut pb_list: Vec<(u32, u64)> = (1..=active_cfg.powerball_max)
+            let mut pb_list: Vec<(u32, u64)> = (1..=active_cfg.powerball_max.unwrap())
                 .map(|i| (i as u32, *s.pb_frequency.get(i as usize).unwrap_or(&0)))
                 .collect();
             pb_list.sort_by(|a, b| b.1.cmp(&a.1));
@@ -197,12 +200,14 @@ impl LotteryApp {
 
     pub fn run_fast_iterations(&mut self, iterations: u64) {
         let stats_arc = self.stats.clone();
+        let analysis_running = self.analysis_running.clone();
         let active_cfg = self.active_config().clone();
         let pool_max = active_cfg.pool_max;
         let draw_count = active_cfg.draw_count;
-        let pb_max = active_cfg.powerball_max;
+        let pb_max = active_cfg.powerball_max.unwrap_or(0);
         let has_powerball = active_cfg.has_powerball;
 
+        analysis_running.store(true, Ordering::Relaxed);
         std::thread::spawn(move || {
             let mut local_freq = vec![0u64; (pool_max + 1) as usize];
             let mut local_pb_freq = vec![0u64; (pb_max + 1) as usize];
@@ -229,6 +234,7 @@ impl LotteryApp {
             for (i, val) in local_pb_freq.iter().enumerate() {
                 stats.pb_frequency[i] += val;
             }
+            analysis_running.store(false, Ordering::Relaxed);
         });
     }
 
@@ -249,7 +255,6 @@ impl LotteryApp {
             }).sum();
             let cost_per_draw = total_games as f64 * active_cfg.cost_per_game;
             let max_prize = active_cfg.prizes.iter().map(|p| p.amount).fold(0.0, f64::max);
-            let top_prize = max_prize * user_tickets.len() as f64;  // assuming each can win max
 
             while running.load(Ordering::Relaxed) {
                 let mut stats = stats_arc.lock().unwrap();
@@ -270,12 +275,13 @@ impl LotteryApp {
                     }
                 }
 
-                let draw_pb = if active_cfg.has_powerball { Some(rng.random_range(1..=active_cfg.powerball_max)) } else { None };
+                let draw_pb = if active_cfg.has_powerball { Some(rng.random_range(1..=active_cfg.powerball_max.unwrap())) } else { None };
                 if let Some(pb) = draw_pb {
                     stats.pb_frequency[pb as usize] += 1;
                 }
 
                 let mut total_prize = 0.0;
+                let mut has_div1 = false;
                 for (i, user_nums) in user_tickets.iter().enumerate() {
                     let prize = calculate_prize(
                         &active_cfg,
@@ -287,13 +293,15 @@ impl LotteryApp {
                         user_pbs[i],
                     );
                     total_prize += prize;
+                    if prize == max_prize {
+                        has_div1 = true;
+                    }
                 }
 
                 stats.balance += total_prize;
                 stats.total_won += total_prize;
 
-                if total_prize >= top_prize && total_prize > 0.0 {
-                    // FIXME: The break functionality is not working as expected. If we have multiple games in a draw it will not exit on a div 1 win
+                if has_div1 {
                     running.store(false, Ordering::Relaxed);
                     let d = stats.total_draws as f64;
                     let b = stats.balance;
@@ -362,7 +370,7 @@ mod tests {
             supps: 2,
             has_powerball: false,
             cost_per_game: 1.0,
-            powerball_max: 20,
+            powerball_max: Some(20),
             prizes: vec![
                 PrizeRule { matches: 6, pb: false, supps: 0, amount: 5_000_000.0 },
                 PrizeRule { matches: 5, pb: false, supps: 1, amount: 12_000.0 },

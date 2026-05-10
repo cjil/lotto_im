@@ -18,7 +18,7 @@ impl LotteryApp {
         let draw_count = active_cfg.draw_count;
         let cost_per_game = active_cfg.cost_per_game;
         let has_powerball = active_cfg.has_powerball;
-        let pb_max = active_cfg.powerball_max;
+        let pb_max = active_cfg.powerball_max.unwrap_or(0);
 
         ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
             ui.heading("Aussie Lotto Sim - High Speed Analyser");
@@ -69,8 +69,20 @@ impl LotteryApp {
                             self.pre_it_exact = val.clamp(1, 1_000_000_000);
                         }
                     }
-                    if ui.button("Run analysis").clicked() {
+
+                    let analysis_running = self.analysis_running.load(Ordering::Relaxed);
+                    if ui
+                        .add_enabled(
+                            !analysis_running,
+                            egui::Button::new(if analysis_running { "Running analysis..." } else { "Run analysis" }),
+                        )
+                        .clicked()
+                    {
                         self.run_fast_iterations(self.pre_it_exact);
+                    }
+
+                    if analysis_running {
+                        ui.colored_label(egui::Color32::YELLOW, "Analysis is running... please wait.");
                     }
                 });
 
@@ -94,12 +106,12 @@ impl LotteryApp {
                     ui.label(self.selected_numbers.len().to_string());
                 });
 
-                let base_games: u64 = self.selected_numbers.iter().map(|nums| crate::helpers::combinations(nums.len() as u64, draw_count as u64)).sum();
                 let ticket_multiplier = self.selected_numbers.len() as u64;
-                let game_multiplier: u64 = self.is_powerhit.iter().zip(&self.selected_numbers).map(|(ph, _nums)| {
-                    if *ph && has_powerball { 20 } else { 1 }
+                let total_games: u64 = self.selected_numbers.iter().zip(&self.is_powerhit).map(|(nums, ph)| {
+                    let base_games = crate::helpers::combinations(nums.len() as u64, draw_count as u64);
+                    let multiplier = if *ph && has_powerball { 20 } else { 1 };
+                    base_games * multiplier
                 }).sum();
-                let total_games = base_games * game_multiplier;
 
                 ui.colored_label(
                     egui::Color32::GOLD,
@@ -156,26 +168,30 @@ impl LotteryApp {
                 });
 
                 ui.separator();
-                ui.label("Current Entries:");
-                let mut to_remove = vec![];
-                for i in 0..self.selected_numbers.len() {
-                    ui.horizontal(|ui| {
-                        ui.label(format!("Entry {}: {:?}", i + 1, self.selected_numbers[i]));
-                        if let Some(p) = self.selected_powerball[i] {
-                            ui.label(format!("PB: {}", p));
-                        }
-                        if self.is_powerhit[i] {
-                            ui.label("Powerhit");
-                        }
-                        if ui.button("Remove").clicked() {
-                            to_remove.push(i);
-                        }
-                    });
-                }
-                for &i in to_remove.iter().rev() {
-                    self.selected_numbers.remove(i);
-                    self.selected_powerball.remove(i);
-                    self.is_powerhit.remove(i);
+                if self.selected_numbers.is_empty() {
+                    ui.colored_label(egui::Color32::YELLOW, "No entries yet. Add your first entry to begin.");
+                } else {
+                    ui.label("Current Entries:");
+                    let mut to_remove = vec![];
+                    for i in 0..self.selected_numbers.len() {
+                        ui.horizontal(|ui| {
+                            ui.label(format!("Entry {}: {:?}", i + 1, self.selected_numbers[i]));
+                            if let Some(p) = self.selected_powerball[i] {
+                                ui.label(format!("PB: {}", p));
+                            }
+                            if self.is_powerhit[i] {
+                                ui.label("Powerhit");
+                            }
+                            if ui.button("Remove").clicked() {
+                                to_remove.push(i);
+                            }
+                        });
+                    }
+                    for &i in to_remove.iter().rev() {
+                        self.selected_numbers.remove(i);
+                        self.selected_powerball.remove(i);
+                        self.is_powerhit.remove(i);
+                    }
                 }
             });
 
@@ -308,7 +324,7 @@ impl LotteryApp {
                     .show(ui, |plot_ui| {
                         plot_ui.line(Line::new("Balance", points).color(egui::Color32::GREEN));
                     });
-            if self.running.load(Ordering::Relaxed) {
+            if self.running.load(Ordering::Relaxed) || self.analysis_running.load(Ordering::Relaxed) {
                 ui.ctx().request_repaint();
             }
         });

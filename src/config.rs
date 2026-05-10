@@ -20,13 +20,8 @@ pub struct GameConfig {
     pub has_powerball: bool,
     #[serde(default)]
     pub supps: u32,
-    #[serde(default = "default_powerball_max")]
-    pub powerball_max: u32,
+    pub powerball_max: Option<u32>,
     pub prizes: Vec<PrizeRule>,
-}
-
-fn default_powerball_max() -> u32 {
-    20 // TODO: This needs to go into the lotto_config.toml file
 }
 
 #[derive(Deserialize, Clone)]
