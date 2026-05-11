@@ -13,7 +13,7 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "Lotto Sim",
         eframe::NativeOptions {
-            viewport: egui::ViewportBuilder::default().with_inner_size([1200.0, 900.0]),
+            viewport: egui::ViewportBuilder::default().with_inner_size([1000.0, 1300.0]),
             ..Default::default()
         },
         Box::new(|_cc| Ok(Box::new(simulation::LotteryApp::new(config)))),
