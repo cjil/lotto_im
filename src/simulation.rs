@@ -1,9 +1,11 @@
 use crate::config::{AppConfig, GameConfig};
 use rand::prelude::*;
-use std::{fs, sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex}};
+use rand::rng;
+use rayon::prelude::*;
+use std::{collections::HashMap, fs, sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex}};
 
 pub fn generate_draw_numbers(pool_max: u32, draw_count: u32) -> Vec<u32> {
-    let mut rng = rand::rng();
+    let mut rng = rng();
     let mut pool: Vec<u32> = (1..=pool_max).collect();
     pool.shuffle(&mut rng);
     pool.truncate(draw_count as usize);
@@ -17,18 +19,18 @@ pub fn generate_draw_with_supps(pool_max: u32, draw_count: u32, supps: u32) -> (
     (main, supp)
 }
 
+#[allow(dead_code)]
 fn calculate_prize(
     active_cfg: &GameConfig,
     user_nums: &[u32],
     draw_nums: &[u32],
     draw_supps: &[u32],
     draw_pb: Option<u32>,
-    is_powerhit: bool,
     user_pb: Option<u32>,
 ) -> (f64, Option<usize>) {
     let matches = user_nums.iter().filter(|n| draw_nums.contains(n)).count();
     let supp_matches = user_nums.iter().filter(|n| draw_supps.contains(n)).count();
-    let pb_matched = active_cfg.has_powerball && (is_powerhit || user_pb == draw_pb);
+    let pb_matched = active_cfg.has_powerball && user_pb == draw_pb;
 
     for (i, rule) in active_cfg.prizes.iter().enumerate() {
         if matches == rule.matches
@@ -40,6 +42,148 @@ fn calculate_prize(
     }
 
     (0.0, None)
+}
+
+fn prize_for_counts(
+    active_cfg: &GameConfig,
+    matches: usize,
+    supp_matches: usize,
+    pb_matched: bool,
+) -> (f64, Option<usize>) {
+    for (i, rule) in active_cfg.prizes.iter().enumerate() {
+        if matches == rule.matches
+            && supp_matches == rule.supps
+            && (!active_cfg.has_powerball || pb_matched == rule.pb)
+        {
+            return (rule.amount, Some(i));
+        }
+    }
+
+    (0.0, None)
+}
+
+fn count_match_distribution(
+    active_cfg: &GameConfig,
+    user_nums: &[u32],
+    draw_nums: &[u32],
+    draw_supps: &[u32],
+) -> HashMap<(usize, usize), u64> {
+    let x = user_nums.iter().filter(|n| draw_nums.contains(n)).count();
+    let y = user_nums.iter().filter(|n| draw_supps.contains(n)).count();
+    let z = user_nums.len() - x - y;
+    let draw_count = active_cfg.draw_count as usize;
+    let mut counts = HashMap::new();
+
+    for k in 0..=x.min(draw_count) {
+        let max_supp = (draw_count - k).min(y);
+        for l in 0..=max_supp {
+            let outsiders = draw_count - k - l;
+            if outsiders > z {
+                continue;
+            }
+            let combo_count = crate::helpers::combinations(x as u64, k as u64)
+                * crate::helpers::combinations(y as u64, l as u64)
+                * crate::helpers::combinations(z as u64, outsiders as u64);
+            if combo_count > 0 {
+                counts.insert((k, l), combo_count);
+            }
+        }
+    }
+
+    counts
+}
+
+fn score_ticket_lines(
+    active_cfg: &GameConfig,
+    user_nums: &[u32],
+    user_pb: Option<u32>,
+    is_powerhit: bool,
+    draw_nums: &[u32],
+    draw_supps: &[u32],
+    draw_pb: Option<u32>,
+    division_wins: &mut [u64],
+) -> (f64, bool) {
+    let counts = count_match_distribution(active_cfg, user_nums, draw_nums, draw_supps);
+    let mut total_prize = 0.0;
+    let mut has_div1 = false;
+
+    let pb_variants = if active_cfg.has_powerball {
+        if is_powerhit {
+            active_cfg.powerball_max.unwrap_or(1) as u64
+        } else {
+            1
+        }
+    } else {
+        1
+    };
+
+    for ((matches, supp_matches), count) in counts {
+        if active_cfg.has_powerball {
+            if is_powerhit {
+                let (pb_match_prize, pb_match_div) = prize_for_counts(
+                    active_cfg,
+                    matches,
+                    supp_matches,
+                    true,
+                );
+                let (pb_miss_prize, pb_miss_div) = prize_for_counts(
+                    active_cfg,
+                    matches,
+                    supp_matches,
+                    false,
+                );
+
+                total_prize += pb_match_prize * count as f64;
+                if pb_variants > 1 {
+                    total_prize += pb_miss_prize * count as f64 * (pb_variants - 1) as f64;
+                }
+
+                if let Some(div_idx) = pb_match_div {
+                    if div_idx < division_wins.len() {
+                        division_wins[div_idx] += count;
+                    }
+                    if div_idx == 0 {
+                        has_div1 = true;
+                    }
+                }
+                if let Some(div_idx) = pb_miss_div {
+                    if div_idx < division_wins.len() {
+                        division_wins[div_idx] += count * (pb_variants - 1);
+                    }
+                }
+            } else {
+                let pb_matched = user_pb == draw_pb;
+                let (prize, division) = prize_for_counts(
+                    active_cfg,
+                    matches,
+                    supp_matches,
+                    pb_matched,
+                );
+                total_prize += prize * count as f64;
+                if let Some(div_idx) = division {
+                    if div_idx < division_wins.len() {
+                        division_wins[div_idx] += count;
+                    }
+                    if div_idx == 0 {
+                        has_div1 = true;
+                    }
+                }
+            }
+        } else {
+            let (prize, division) = prize_for_counts(active_cfg, matches, supp_matches, false);
+            total_prize += prize * count as f64;
+            if let Some(div_idx) = division {
+                if div_idx < division_wins.len() {
+                    division_wins[div_idx] += count;
+                }
+                if div_idx == 0 {
+                    has_div1 = true;
+                }
+            }
+        }
+    }
+
+    (total_prize, has_div1)
 }
 
 #[derive(Clone)]
@@ -73,72 +217,76 @@ pub struct LotteryApp {
 
 pub fn run_batch_simulation(config: &AppConfig, game_name: &str, ticket_specs: Vec<(Vec<u32>, Option<u32>, bool)>, iterations: u64) -> BatchResult {
     let game = match config.games.get(game_name) {
-        Some(g) => g.clone(),
+        Some(g) => Arc::new(g.clone()),
         None => panic!("Game '{}' not found in config", game_name),
     };
 
+    let ticket_specs = Arc::new(ticket_specs);
     let starting_balance = config.general.starting_balance;
 
-    let mut results = Vec::new();
+    let results: Vec<SimStats> = (0..iterations)
+        .into_par_iter()
+        .map(|_| {
+            let game = Arc::clone(&game);
+            let ticket_specs = Arc::clone(&ticket_specs);
+            let mut stats = SimStats {
+                balance: starting_balance,
+                total_draws: 0,
+                total_won: 0.0,
+                division_wins: vec![0; game.prizes.len()],
+                history: vec![],
+                number_frequency: vec![0; (game.pool_max + 1) as usize],
+                pb_frequency: vec![0; game.powerball_max.unwrap_or(0) as usize + 1],
+            };
 
-    for _ in 0..iterations {
-        let mut stats = SimStats {
-            balance: starting_balance,
-            total_draws: 0,
-            total_won: 0.0,
-            division_wins: vec![0; game.prizes.len()],
-            history: vec![],
-            number_frequency: vec![0; (game.pool_max + 1) as usize],
-            pb_frequency: vec![0; game.powerball_max.unwrap_or(0) as usize + 1],
-        };
+            let total_games: u64 = ticket_specs.iter().map(|(nums, _, ph)| {
+                let base_combs = crate::helpers::combinations(nums.len() as u64, game.draw_count as u64);
+                let multiplier = if *ph && game.has_powerball {
+                    game.powerball_max.unwrap_or(1) as u64
+                } else {
+                    1
+                };
+                base_combs * multiplier
+            }).sum();
+            let cost_per_draw = total_games as f64 * game.cost_per_game;
 
-        let total_games: u64 = ticket_specs.iter().map(|(nums, _, ph)| {
-            let base_combs = crate::helpers::combinations(nums.len() as u64, game.draw_count as u64);
-            let multiplier = if *ph && game.has_powerball { 20 } else { 1 };
-            base_combs * multiplier
-        }).sum();
-        let cost_per_draw = total_games as f64 * game.cost_per_game;
+            while stats.balance >= cost_per_draw {
+                stats.total_draws += 1;
+                stats.balance -= cost_per_draw;
 
-        let mut rng = rand::rng();
+                let (winning_nums, winning_supps) = generate_draw_with_supps(game.pool_max, game.draw_count, game.supps);
+                let draw_pb = if game.has_powerball { Some(rand::random::<u32>() % game.powerball_max.unwrap() + 1) } else { None };
 
-        while stats.balance >= cost_per_draw {
-            stats.total_draws += 1;
-            stats.balance -= cost_per_draw;
-
-            let (winning_nums, winning_supps) = generate_draw_with_supps(game.pool_max, game.draw_count, game.supps);
-            let draw_pb = if game.has_powerball { Some(rng.random_range(1..=game.powerball_max.unwrap())) } else { None };
-
-            let mut total_prize = 0.0;
-            let mut has_div1 = false;
-            for (user_nums, user_pb, is_powerhit) in &ticket_specs {
-                let (prize, division) = calculate_prize(
-                    &game,
-                    user_nums,
-                    &winning_nums,
-                    &winning_supps,
-                    draw_pb,
-                    *is_powerhit,
-                    *user_pb,
-                );
-                total_prize += prize;
-                if let Some(div_idx) = division {
-                    stats.division_wins[div_idx] += 1;
-                    if div_idx == 0 { // Division 1 (index 0)
+                let mut total_prize = 0.0;
+                let mut has_div1 = false;
+                for (user_nums, user_pb, is_powerhit) in ticket_specs.iter() {
+                    let (prize, won_div1) = score_ticket_lines(
+                        &game,
+                        user_nums,
+                        *user_pb,
+                        *is_powerhit,
+                        &winning_nums,
+                        &winning_supps,
+                        draw_pb,
+                        &mut stats.division_wins,
+                    );
+                    total_prize += prize;
+                    if won_div1 {
                         has_div1 = true;
                     }
                 }
+
+                stats.balance += total_prize;
+                stats.total_won += total_prize;
+
+                if has_div1 {
+                    break;
+                }
             }
 
-            stats.balance += total_prize;
-            stats.total_won += total_prize;
-
-            if has_div1 {
-                break;
-            }
-        }
-
-        results.push(stats);
-    }
+            stats
+        })
+        .collect();
 
     BatchResult { results }
 }
@@ -310,7 +458,7 @@ impl LotteryApp {
             if tied_group.len() <= remaining {
                 final_selection.extend(tied_group);
             } else {
-                let mut rng = rand::rng();
+                let mut rng = rng();
                 tied_group.shuffle(&mut rng);
                 final_selection.extend(&tied_group[..remaining]);
             }
@@ -332,7 +480,6 @@ impl LotteryApp {
         std::thread::spawn(move || {
             let mut local_freq = vec![0u64; (pool_max + 1) as usize];
             let mut local_pb_freq = vec![0u64; (pb_max + 1) as usize];
-            let mut rng = rand::rng();
 
             for _ in 0..iterations {
                 let (winning_nums, winning_supps) = generate_draw_with_supps(pool_max, draw_count, active_cfg.supps);
@@ -340,7 +487,7 @@ impl LotteryApp {
                     local_freq[n as usize] += 1;
                 }
                 if has_powerball {
-                    let pb = rng.random_range(1..=pb_max);
+                    let pb = rand::random::<u32>() % pb_max + 1;
                     local_pb_freq[pb as usize] += 1;
                 }
             }
@@ -368,10 +515,13 @@ impl LotteryApp {
         let powerhits = self.is_powerhit.clone();
 
         std::thread::spawn(move || {
-            let mut rng = rand::rng();
-            let total_games: u64 = user_tickets.iter().map(|nums| {
+            let total_games: u64 = user_tickets.iter().enumerate().map(|(i, nums)| {
                 let base_combs = crate::helpers::combinations(nums.len() as u64, active_cfg.draw_count as u64);
-                let game_multiplier = if powerhits[user_tickets.iter().position(|t| t == nums).unwrap()] && active_cfg.has_powerball { 20 } else { 1 };
+                let game_multiplier = if powerhits[i] && active_cfg.has_powerball {
+                    active_cfg.powerball_max.unwrap_or(1) as u64
+                } else {
+                    1
+                };
                 base_combs * game_multiplier
             }).sum();
             let cost_per_draw = total_games as f64 * active_cfg.cost_per_game;
@@ -395,7 +545,7 @@ impl LotteryApp {
                     }
                 }
 
-                let draw_pb = if active_cfg.has_powerball { Some(rng.random_range(1..=active_cfg.powerball_max.unwrap())) } else { None };
+                let draw_pb = if active_cfg.has_powerball { Some(rand::random::<u32>() % active_cfg.powerball_max.unwrap() + 1) } else { None };
                 if let Some(pb) = draw_pb {
                     stats.pb_frequency[pb as usize] += 1;
                 }
@@ -403,21 +553,19 @@ impl LotteryApp {
                 let mut total_prize = 0.0;
                 let mut has_div1 = false;
                 for (i, user_nums) in user_tickets.iter().enumerate() {
-                    let (prize, division) = calculate_prize(
+                    let (prize, won_div1) = score_ticket_lines(
                         &active_cfg,
                         user_nums,
+                        user_pbs[i],
+                        powerhits[i],
                         &winning_nums,
                         &winning_supps,
                         draw_pb,
-                        powerhits[i],
-                        user_pbs[i],
+                        &mut stats.division_wins,
                     );
                     total_prize += prize;
-                    if let Some(div_idx) = division {
-                        stats.division_wins[div_idx] += 1;
-                        if div_idx == 0 { // Division 1 (index 0)
-                            has_div1 = true;
-                        }
+                    if won_div1 {
+                        has_div1 = true;
                     }
                 }
 
@@ -446,7 +594,7 @@ impl LotteryApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{calculate_prize, generate_draw_numbers, generate_draw_with_supps};
+    use super::{calculate_prize, generate_draw_numbers, generate_draw_with_supps, score_ticket_lines};
     use crate::config::{GameConfig, PrizeRule};
     use std::collections::HashSet;
 
@@ -505,12 +653,47 @@ mod tests {
         let draw_nums = vec![1, 2, 3, 4, 5, 7];
         let draw_supps = vec![8, 9];
 
-        let (prize_without_supp, _) = calculate_prize(&active_cfg, &user_nums, &draw_nums, &draw_supps, None, false, None);
+        let (prize_without_supp, _) = calculate_prize(&active_cfg, &user_nums, &draw_nums, &draw_supps, None, None);
         assert_eq!(prize_without_supp, 1_000.0);
 
         let draw_supps_match = vec![6, 8];
-        let (prize_with_supp, _) = calculate_prize(&active_cfg, &user_nums, &draw_nums, &draw_supps_match, None, false, None);
+        let (prize_with_supp, _) = calculate_prize(&active_cfg, &user_nums, &draw_nums, &draw_supps_match, None, None);
         assert_eq!(prize_with_supp, 12_000.0);
+    }
+
+    #[test]
+    fn powerhit_system_expands_all_lines() {
+        let active_cfg = GameConfig {
+            pool_max: 10,
+            draw_count: 2,
+            supps: 0,
+            has_powerball: true,
+            cost_per_game: 1.0,
+            powerball_max: Some(3),
+            prizes: vec![
+                PrizeRule { matches: 2, pb: true, supps: 0, amount: 100.0 },
+                PrizeRule { matches: 2, pb: false, supps: 0, amount: 50.0 },
+                PrizeRule { matches: 1, pb: true, supps: 0, amount: 10.0 },
+            ],
+        };
+
+        let mut division_wins = vec![0u64; active_cfg.prizes.len()];
+        let (total_prize, has_div1) = score_ticket_lines(
+            &active_cfg,
+            &[1, 2, 3],
+            None,
+            true,
+            &[1, 2],
+            &[],
+            Some(1),
+            &mut division_wins,
+        );
+
+        assert!(has_div1, "PowerHit should include at least one division 1 win");
+        assert_eq!(total_prize, 220.0);
+        assert_eq!(division_wins[0], 1);
+        assert_eq!(division_wins[1], 2);
+        assert_eq!(division_wins[2], 2);
     }
 
     #[test]
