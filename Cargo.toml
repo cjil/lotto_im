@@ -11,3 +11,4 @@ rand = "0.10"
 itertools = "0.14"
 egui_plot = "0.35"
 getrandom = {version = "0.4", features = ["std", "sys_rng"] }
+rayon = "1.9"

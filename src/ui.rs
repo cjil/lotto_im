@@ -110,7 +110,11 @@ impl LotteryApp {
                 let ticket_multiplier = self.selected_numbers.len() as u64;
                 let total_games: u64 = self.selected_numbers.iter().zip(&self.is_powerhit).map(|(nums, ph)| {
                     let base_games = crate::helpers::combinations(nums.len() as u64, draw_count as u64);
-                    let multiplier = if *ph && has_powerball { 20 } else { 1 };
+                    let multiplier = if *ph && has_powerball {
+                        pb_max as u64
+                    } else {
+                        1
+                    };
                     base_games * multiplier
                 }).sum();
 
