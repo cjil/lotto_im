@@ -19,6 +19,7 @@ impl LotteryApp {
         let cost_per_game = active_cfg.cost_per_game;
         let has_powerball = active_cfg.has_powerball;
         let pb_max = active_cfg.powerball_max.unwrap_or(0);
+        let division_count = active_cfg.prizes.len();
 
         ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
             ui.heading("Aussie Lotto Sim - High Speed Analyser");
@@ -270,6 +271,17 @@ impl LotteryApp {
                     cols[2].label("Total Draws Played");
                     cols[2].heading(format_with_separators(s.total_draws));
                 });
+
+                ui.add_space(10.0);
+                ui.group(|ui| {
+                    ui.label("Division Wins");
+                    for (i, &count) in s.division_wins.iter().enumerate() {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(format!("Division {}:", i + 1));
+                            ui.label(format_with_separators(count));
+                        });
+                    }
+                });
             }
 
             ui.horizontal(|ui| {
@@ -297,6 +309,7 @@ impl LotteryApp {
                         balance: self.custom_starting_balance,
                         total_draws: 0,
                         total_won: 0.0,
+                        division_wins: vec![0; division_count],
                         history: vec![],
                         number_frequency: vec![0; (pool_max + 1) as usize],
                         pb_frequency: vec![0; (pb_max + 1) as usize],

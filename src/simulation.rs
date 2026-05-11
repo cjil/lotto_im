@@ -25,27 +25,29 @@ fn calculate_prize(
     draw_pb: Option<u32>,
     is_powerhit: bool,
     user_pb: Option<u32>,
-) -> f64 {
+) -> (f64, Option<usize>) {
     let matches = user_nums.iter().filter(|n| draw_nums.contains(n)).count();
     let supp_matches = user_nums.iter().filter(|n| draw_supps.contains(n)).count();
     let pb_matched = active_cfg.has_powerball && (is_powerhit || user_pb == draw_pb);
 
-    for rule in &active_cfg.prizes {
+    for (i, rule) in active_cfg.prizes.iter().enumerate() {
         if matches == rule.matches
             && supp_matches == rule.supps
             && (!active_cfg.has_powerball || pb_matched == rule.pb)
         {
-            return rule.amount;
+            return (rule.amount, Some(i));
         }
     }
 
-    0.0
+    (0.0, None)
 }
 
+#[derive(Clone)]
 pub struct SimStats {
     pub balance: f64,
     pub total_draws: u64,
     pub total_won: f64,
+    pub division_wins: Vec<u64>,
     pub history: Vec<[f64; 2]>,
     pub number_frequency: Vec<u64>,
     pub pb_frequency: Vec<u64>,
@@ -67,6 +69,123 @@ pub struct LotteryApp {
     pub auto_pick_count: usize,
     pub pre_it_exact: u64,
     pub custom_starting_balance: f64,
+}
+
+pub fn run_batch_simulation(config: &AppConfig, game_name: &str, ticket_specs: Vec<(Vec<u32>, Option<u32>, bool)>, iterations: u64) -> BatchResult {
+    let game = match config.games.get(game_name) {
+        Some(g) => g.clone(),
+        None => panic!("Game '{}' not found in config", game_name),
+    };
+
+    let starting_balance = config.general.starting_balance;
+
+    let mut results = Vec::new();
+
+    for _ in 0..iterations {
+        let mut stats = SimStats {
+            balance: starting_balance,
+            total_draws: 0,
+            total_won: 0.0,
+            division_wins: vec![0; game.prizes.len()],
+            history: vec![],
+            number_frequency: vec![0; (game.pool_max + 1) as usize],
+            pb_frequency: vec![0; game.powerball_max.unwrap_or(0) as usize + 1],
+        };
+
+        let total_games: u64 = ticket_specs.iter().map(|(nums, _, ph)| {
+            let base_combs = crate::helpers::combinations(nums.len() as u64, game.draw_count as u64);
+            let multiplier = if *ph && game.has_powerball { 20 } else { 1 };
+            base_combs * multiplier
+        }).sum();
+        let cost_per_draw = total_games as f64 * game.cost_per_game;
+
+        let mut rng = rand::rng();
+
+        while stats.balance >= cost_per_draw {
+            stats.total_draws += 1;
+            stats.balance -= cost_per_draw;
+
+            let (winning_nums, winning_supps) = generate_draw_with_supps(game.pool_max, game.draw_count, game.supps);
+            let draw_pb = if game.has_powerball { Some(rng.random_range(1..=game.powerball_max.unwrap())) } else { None };
+
+            let mut total_prize = 0.0;
+            let mut has_div1 = false;
+            for (user_nums, user_pb, is_powerhit) in &ticket_specs {
+                let (prize, division) = calculate_prize(
+                    &game,
+                    user_nums,
+                    &winning_nums,
+                    &winning_supps,
+                    draw_pb,
+                    *is_powerhit,
+                    *user_pb,
+                );
+                total_prize += prize;
+                if let Some(div_idx) = division {
+                    stats.division_wins[div_idx] += 1;
+                    if div_idx == 0 { // Division 1 (index 0)
+                        has_div1 = true;
+                    }
+                }
+            }
+
+            stats.balance += total_prize;
+            stats.total_won += total_prize;
+
+            if has_div1 {
+                break;
+            }
+        }
+
+        results.push(stats);
+    }
+
+    BatchResult { results }
+}
+
+#[derive(Clone)]
+pub struct BatchResult {
+    pub results: Vec<SimStats>,
+}
+
+impl BatchResult {
+    pub fn print_summary(&self, strategy_name: &str) {
+        if self.results.is_empty() {
+            println!("No results");
+            return;
+        }
+
+        let total_runs = self.results.len() as f64;
+        let mut final_balances: Vec<f64> = self.results.iter().map(|r| r.balance).collect();
+        final_balances.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+        let median_balance = final_balances[final_balances.len() / 2];
+        let min_balance = final_balances[0];
+        let max_balance = final_balances[final_balances.len() - 1];
+        let avg_balance = final_balances.iter().sum::<f64>() / total_runs;
+        let avg_draws: f64 = self.results.iter().map(|r| r.total_draws as f64).sum::<f64>() / total_runs;
+        let avg_won: f64 = self.results.iter().map(|r| r.total_won).sum::<f64>() / total_runs;
+
+        println!("\n=== Strategy: {} ===", strategy_name);
+        println!("Runs: {}", self.results.len());
+        println!("Median Balance: ${:.2}", median_balance);
+        println!("Min Balance: ${:.2}", min_balance);
+        println!("Max Balance: ${:.2}", max_balance);
+        println!("Avg Balance: ${:.2}", avg_balance);
+        println!("Avg Draws to Div1 or Bust: {:.0}", avg_draws);
+        println!("Avg Total Won: ${:.2}", avg_won);
+        
+        // Show division wins if we have results
+        if let Some(first_result) = self.results.first() {
+            println!("\nDivision Wins:");
+            for (i, _) in first_result.division_wins.iter().enumerate() {
+                let total_wins: u64 = self.results.iter().map(|r| r.division_wins[i]).sum();
+                if total_wins > 0 {
+                    println!("  Division {}: {}", i + 1, total_wins);
+                }
+            }
+        }
+    }
 }
 
 impl LotteryApp {
@@ -103,11 +222,13 @@ impl LotteryApp {
     pub fn build_stats(config: &AppConfig) -> SimStats {
         let max_pool = config.games.values().map(|g| g.pool_max).max().unwrap_or(0) as usize;
         let max_pb = config.games.values().filter(|g| g.has_powerball).filter_map(|g| g.powerball_max).max().unwrap_or(0) as usize;
+        let max_divisions = config.games.values().map(|g| g.prizes.len()).max().unwrap_or(0);
 
         SimStats {
             balance: config.general.starting_balance,
             total_draws: 0,
             total_won: 0.0,
+            division_wins: vec![0; max_divisions],
             history: vec![],
             number_frequency: vec![0; max_pool + 1],
             pb_frequency: vec![0; max_pb + 1],
@@ -254,7 +375,6 @@ impl LotteryApp {
                 base_combs * game_multiplier
             }).sum();
             let cost_per_draw = total_games as f64 * active_cfg.cost_per_game;
-            let max_prize = active_cfg.prizes.iter().map(|p| p.amount).fold(0.0, f64::max);
 
             while running.load(Ordering::Relaxed) {
                 let mut stats = stats_arc.lock().unwrap();
@@ -283,7 +403,7 @@ impl LotteryApp {
                 let mut total_prize = 0.0;
                 let mut has_div1 = false;
                 for (i, user_nums) in user_tickets.iter().enumerate() {
-                    let prize = calculate_prize(
+                    let (prize, division) = calculate_prize(
                         &active_cfg,
                         user_nums,
                         &winning_nums,
@@ -293,8 +413,11 @@ impl LotteryApp {
                         user_pbs[i],
                     );
                     total_prize += prize;
-                    if prize == max_prize {
-                        has_div1 = true;
+                    if let Some(div_idx) = division {
+                        stats.division_wins[div_idx] += 1;
+                        if div_idx == 0 { // Division 1 (index 0)
+                            has_div1 = true;
+                        }
                     }
                 }
 
@@ -382,11 +505,11 @@ mod tests {
         let draw_nums = vec![1, 2, 3, 4, 5, 7];
         let draw_supps = vec![8, 9];
 
-        let prize_without_supp = calculate_prize(&active_cfg, &user_nums, &draw_nums, &draw_supps, None, false, None);
+        let (prize_without_supp, _) = calculate_prize(&active_cfg, &user_nums, &draw_nums, &draw_supps, None, false, None);
         assert_eq!(prize_without_supp, 1_000.0);
 
         let draw_supps_match = vec![6, 8];
-        let prize_with_supp = calculate_prize(&active_cfg, &user_nums, &draw_nums, &draw_supps_match, None, false, None);
+        let (prize_with_supp, _) = calculate_prize(&active_cfg, &user_nums, &draw_nums, &draw_supps_match, None, false, None);
         assert_eq!(prize_with_supp, 12_000.0);
     }
 
